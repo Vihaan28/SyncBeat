@@ -99,6 +99,8 @@
 
   /* SCREENS */
   .screen { display: none; flex-direction: column; flex: 1; overflow: hidden; position: relative; z-index: 1; }
+  #joinScreen { overflow: visible; }
+  #joinScreen { overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .screen.active { display: flex; }
 
   /* SCROLL AREA */
@@ -139,6 +141,7 @@
     border: none; cursor: pointer; font-family: 'Syne', sans-serif;
     font-size: 14px; font-weight: 700; letter-spacing: 0.3px;
     transition: all 0.2s; position: relative; overflow: hidden;
+    touch-action: manipulation; -webkit-tap-highlight-color: transparent;
   }
   .btn:active{transform:scale(0.97)}
   .btn-primary{background:var(--accent);color:#000}
@@ -403,7 +406,7 @@
   }
 
   /* JOIN / INPUT */
-  .join-form{padding:20px;display:flex;flex-direction:column;gap:14px;flex:1}
+  .join-form{padding:20px;display:flex;flex-direction:column;gap:14px;flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
   .input-label{font-size:11px;text-transform:uppercase;letter-spacing:2px;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:6px;display:block}
   input[type=text]{
     width:100%;background:var(--surface);border:1px solid var(--border);
@@ -629,24 +632,39 @@
 
 <!-- =================== JOIN SCREEN =================== -->
 <div class="screen" id="joinScreen">
-  <div class="join-form">
+  <div style="padding:20px;display:flex;flex-direction:column;gap:16px;overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;">
+
     <div>
       <h2 style="font-size:20px;font-weight:800;margin-bottom:6px">Join a Session</h2>
-      <p style="font-size:12px;color:var(--text2);line-height:1.5">Enter the room code from the host device. Make sure you're on the same Wi-Fi network and your Bluetooth speaker is connected.</p>
+      <p style="font-size:12px;color:var(--text2);line-height:1.5">Enter the room code shown on the host device.</p>
     </div>
+
     <div>
       <label class="input-label">Room Code</label>
-      <input type="text" id="roomCodeInput" maxlength="6" placeholder="XXXXXX" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')">
+      <input type="text" id="roomCodeInput" maxlength="6" placeholder="XXXXXX"
+        oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9]/g,'')"
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-family:'DM Mono',monospace;font-size:22px;letter-spacing:8px;text-transform:uppercase;outline:none;text-align:center;box-sizing:border-box;">
     </div>
+
     <div>
       <label class="input-label">Your Speaker Name</label>
-      <input type="text" id="clientNameInput" class="normal" placeholder="Kitchen Speaker" maxlength="24">
+      <input type="text" id="clientNameInput" placeholder="e.g. Kitchen Speaker" maxlength="24"
+        style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;color:var(--text);font-family:'DM Mono',monospace;font-size:15px;outline:none;box-sizing:border-box;">
     </div>
-    <div id="joinStatusMsg" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3);text-align:center;min-height:16px"></div>
-    <div class="btn-row" style="margin-top:auto">
-      <button class="btn btn-ghost" onclick="goHome()">← Back</button>
-      <button class="btn btn-primary" onclick="joinSession()">Connect →</button>
-    </div>
+
+    <div id="joinStatusMsg" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--accent3);text-align:center;min-height:18px;padding:2px 0;"></div>
+
+    <!-- Big easy-to-tap connect button -->
+    <button onclick="joinSession()" id="joinConnectBtn"
+      style="width:100%;padding:18px;border-radius:14px;border:none;background:var(--accent);color:#000;font-family:'Syne',sans-serif;font-size:16px;font-weight:800;cursor:pointer;letter-spacing:0.3px;-webkit-tap-highlight-color:transparent;touch-action:manipulation;">
+      Connect →
+    </button>
+
+    <button onclick="goHome()"
+      style="width:100%;padding:14px;border-radius:14px;border:1px solid var(--border);background:transparent;color:var(--text2);font-family:'Syne',sans-serif;font-size:14px;font-weight:700;cursor:pointer;-webkit-tap-highlight-color:transparent;touch-action:manipulation;">
+      ← Back
+    </button>
+
   </div>
 </div>
 
@@ -1883,7 +1901,7 @@ async function joinSession() {
   });
 
   // Show connecting state
-  const joinBtn = document.querySelector('#joinScreen .btn-primary');
+  const joinBtn = document.getElementById('joinConnectBtn');
   if (joinBtn) { joinBtn.textContent = 'Connecting...'; joinBtn.disabled = true; }
 
   try {
