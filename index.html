@@ -52,14 +52,14 @@
     transform: translateX(-50%);
     width: 600px; height: 600px;
     background: radial-gradient(circle, rgba(0,229,255,0.06) 0%, transparent 70%);
-    border-radius: 50%; pointer-events: none; z-index: 0;
+    border-radius: 50%; pointer-events: none !important; z-index: 0;
     animation: bgpulse 4s ease-in-out infinite;
   }
   .bg-pulse2 {
     position: fixed; bottom: -200px; left: 30%;
     width: 400px; height: 400px;
     background: radial-gradient(circle, rgba(124,58,237,0.05) 0%, transparent 70%);
-    border-radius: 50%; pointer-events: none; z-index: 0;
+    border-radius: 50%; pointer-events: none !important; z-index: 0;
   }
   @keyframes bgpulse {
     0%,100%{opacity:.5;transform:translateX(-50%) scale(1)}
@@ -70,7 +70,7 @@
   .header {
     flex-shrink: 0; padding: 16px 20px 12px;
     display: flex; align-items: center; justify-content: space-between;
-    position: relative; z-index: 10;
+    position: relative; z-index: 10; pointer-events: auto;
   }
   .logo { display: flex; align-items: center; gap: 8px; }
   .logo-icon {
@@ -98,13 +98,13 @@
   .status-label { font-family:'DM Mono',monospace; font-size:10px; color:var(--text2); }
 
   /* SCREENS */
-  .screen { display: none; flex-direction: column; flex: 1; overflow: hidden; position: relative; z-index: 1; }
-  #joinScreen { overflow: visible; }
+  .screen { display: none; flex-direction: column; flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; position: relative; z-index: 2; }
+  #joinScreen { overflow-y: auto; }
   #joinScreen { overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .screen.active { display: flex; }
 
   /* SCROLL AREA */
-  .scroll-area { flex:1; overflow-y:auto; overflow-x:hidden; display:block; }
+  .scroll-area { flex:1; overflow-y:auto; overflow-x:hidden; display:block; position:relative; z-index:2; }
   .scroll-area::-webkit-scrollbar{width:2px}
   .scroll-area::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 
@@ -113,6 +113,8 @@
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     padding: 24px 20px; gap: 28px;
+    overflow-y: auto; -webkit-overflow-scrolling: touch;
+    position: relative; z-index: 2;
   }
   .hero-visual { position: relative; width: 160px; height: 160px; }
   .rings { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
@@ -135,7 +137,7 @@
   .hero-label p { font-size: 13px; color: var(--text2); line-height: 1.5; max-width: 280px; }
 
   /* BUTTONS */
-  .btn-row { display: flex; gap: 10px; width: 100%; }
+  .btn-row { display: flex; gap: 10px; width: 100%; position: relative; z-index: 5; }
   .btn {
     flex: 1; padding: 15px 12px; border-radius: var(--radius);
     border: none; cursor: pointer; font-family: 'Syne', sans-serif;
@@ -454,10 +456,10 @@
   /* MODAL OVERLAY */
   .modal-overlay{
     position:fixed;inset:0;background:rgba(8,12,16,.9);
-    display:flex;align-items:flex-end;justify-content:center;
+    display:none;align-items:flex-end;justify-content:center;
     z-index:200;opacity:0;pointer-events:none;transition:opacity .3s;
   }
-  .modal-overlay.show{opacity:1;pointer-events:all}
+  .modal-overlay.show{display:flex;opacity:1;pointer-events:all}
   .modal-sheet{
     background:var(--surface);border:1px solid var(--border);
     border-radius:20px 20px 0 0;padding:20px;width:100%;
@@ -623,9 +625,15 @@
       </div>
     </div>
 
-    <div class="btn-row" style="padding:0 4px">
-      <button class="btn btn-primary" onclick="showHostSetup()">🎵 Host Session</button>
-      <button class="btn btn-secondary" onclick="showJoin()">📡 Join Session</button>
+    <div class="btn-row" style="padding:0 4px;position:relative;z-index:10;">
+      <button class="btn btn-primary" onclick="showHostSetup()"
+        style="touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer;position:relative;z-index:10;">
+        🎵 Host Session
+      </button>
+      <button class="btn btn-secondary" onclick="showJoin()"
+        style="touch-action:manipulation;-webkit-tap-highlight-color:transparent;cursor:pointer;position:relative;z-index:10;">
+        📡 Join Session
+      </button>
     </div>
   </div>
 </div>
