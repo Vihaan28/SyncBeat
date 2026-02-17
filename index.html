@@ -642,6 +642,7 @@
       <label class="input-label">Your Speaker Name</label>
       <input type="text" id="clientNameInput" class="normal" placeholder="Kitchen Speaker" maxlength="24">
     </div>
+    <div id="joinStatusMsg" style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3);text-align:center;min-height:16px"></div>
     <div class="btn-row" style="margin-top:auto">
       <button class="btn btn-ghost" onclick="goHome()">← Back</button>
       <button class="btn btn-primary" onclick="joinSession()">Connect →</button>
@@ -658,8 +659,11 @@
       <div class="room-code-display">
         <span class="room-code-label">Room Code — share with others</span>
         <span class="room-code" id="displayRoomCode">------</span>
-        <div style="display:flex;gap:8px;justify-content:center;margin-top:10px">
-          <button class="btn btn-secondary" style="flex:none;padding:8px 18px;font-size:12px" onclick="copyRoomCode()">📋 Copy</button>
+        <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-top:8px;margin-bottom:10px">
+          <span id="p2pBadge" style="font-family:'DM Mono',monospace;font-size:10px;padding:3px 8px;border-radius:20px;border:1px solid var(--border);color:var(--text3);background:var(--surface2)">⏳ Connecting...</span>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:center">
+          <button class="btn btn-secondary" style="flex:none;padding:8px 18px;font-size:12px" onclick="copyRoomCode()">📋 Copy Code</button>
           <button class="btn btn-ghost" style="flex:none;padding:8px 18px;font-size:12px" onclick="goHome()">End Session</button>
         </div>
       </div>
@@ -1013,6 +1017,7 @@ class SyncEngine {
     this.clientConns = new Map();
     this.bc = null;
     this._pingTimers = [];
+    this._connectedViaP2P = false;
   }
 
   genCode() {
@@ -1020,15 +1025,19 @@ class SyncEngine {
     return Array.from({length:6}, ()=>c[Math.floor(Math.random()*c.length)]).join('');
   }
 
+  // ===== HOST =====
   async hostRoom() {
     this.isHost = true;
     this.roomCode = this.genCode();
-    // BroadcastChannel for same-browser fallback
-    this.bc = new BroadcastChannel(`sb_${this.roomCode}`);
-    this.bc.onmessage = e => this._handle(e.data, 'bc');
-    // PeerJS for cross-device
-    await this._initPeer('syncbeat-host-' + this.roomCode);
-    if (this.peer) {
+
+    // BroadcastChannel (same browser, multiple tabs)
+    this._setupBC();
+
+    // PeerJS — try multiple free servers in order
+    const hostId = 'syncbeat-' + this.roomCode;
+    const ok = await this._initPeer(hostId);
+
+    if (ok && this.peer) {
       this.peer.on('connection', conn => {
         conn.on('open', () => {
           this.clientConns.set(conn.peer, conn);
@@ -1037,93 +1046,184 @@ class SyncEngine {
             this.clientConns.delete(conn.peer);
             this._handleDisconnect(conn.peer);
           });
+          conn.on('error', () => this.clientConns.delete(conn.peer));
         });
       });
+      updateHostConnectionBadge(true);
+    } else {
+      // PeerJS unavailable — host in BC-only mode
+      updateHostConnectionBadge(false);
+      showToast('⚠ P2P unavailable — same-device only');
     }
     return this.roomCode;
   }
 
+  // ===== CLIENT =====
   async joinRoom(code) {
     this.isHost = false;
     this.roomCode = code;
-    this.bc = new BroadcastChannel(`sb_${code}`);
-    this.bc.onmessage = e => this._handle(e.data, 'bc');
-    await this._initPeer(this.clientId);
+    this._setupBC();
+
+    // Show progress
+    updateJoinStatus('Connecting to PeerJS...');
+
+    const ok = await this._initPeer(this.clientId);
+
+    if (!ok || !this.peer) {
+      updateJoinStatus('PeerJS unavailable — trying local...');
+      // Last resort: BroadcastChannel only
+      this._sendBC({type:'join', name:S.clientName, id:this.clientId});
+      this._startClockSyncBC();
+      return { method: 'bc-only' };
+    }
+
     return new Promise((resolve, reject) => {
-      if (!this.peer) {
-        // PeerJS failed, BroadcastChannel only (same device)
-        this.bc.postMessage({type:'join', name:S.clientName, id:this.clientId, _from:this.clientId, _room:code, _ts:Date.now()});
-        this._startClockSyncBC();
-        resolve(true);
-        return;
-      }
-      const hostPeerId = 'syncbeat-host-' + code;
+      updateJoinStatus('Looking up host...');
+
+      const hostPeerId = 'syncbeat-' + code;
+      let conn;
       try {
-        this.hostConn = this.peer.connect(hostPeerId, {reliable:true, serialization:'json'});
+        conn = this.peer.connect(hostPeerId, {
+          reliable: true,
+          serialization: 'json',
+          metadata: { name: S.clientName, id: this.clientId }
+        });
+        this.hostConn = conn;
       } catch(e) {
-        reject(new Error('Could not connect to host. Make sure room code is correct.'));
+        reject(new Error('Could not initiate connection'));
         return;
       }
+
+      // Timeout — if PeerJS can't connect in 12s, fail clearly
       const timeout = setTimeout(() => {
-        // Try BroadcastChannel as fallback
-        showToast('Trying local connection...');
-        this.bc.postMessage({type:'join', name:S.clientName, id:this.clientId, _from:this.clientId, _room:code, _ts:Date.now()});
-        this._startClockSyncBC();
-        resolve(true);
-      }, 10000);
-      this.hostConn.on('open', () => {
+        reject(new Error(
+          'Could not reach host.
+
+' +
+          'Check that:
+' +
+          '• Both devices are online
+' +
+          '• Room code is correct
+' +
+          '• Host session is still active'
+        ));
+      }, 12000);
+
+      conn.on('open', () => {
         clearTimeout(timeout);
-        this.hostConn.on('data', data => this._handle(data, 'host'));
-        this.hostConn.on('close', () => showToast('Disconnected from host'));
+        this._connectedViaP2P = true;
+        updateJoinStatus('Connected ✓');
+        conn.on('data', data => this._handle(data, 'host'));
+        conn.on('close', () => {
+          this._connectedViaP2P = false;
+          showToast('Disconnected from host');
+          updateStatus('', 'offline');
+        });
+        conn.on('error', err => console.warn('conn error:', err));
+        // Announce ourselves
         this._sendToHost({type:'join', name:S.clientName, id:this.clientId});
         this._startClockSync();
-        resolve(true);
+        resolve({ method: 'p2p' });
       });
-      this.hostConn.on('error', err => {
+
+      conn.on('error', err => {
         clearTimeout(timeout);
-        showToast('Connection error - check room code');
-        reject(err);
+        const msg = err.type === 'peer-unavailable'
+          ? 'Host not found. Make sure host is running and code is correct.'
+          : 'Connection failed: ' + (err.message || err.type);
+        reject(new Error(msg));
       });
     });
   }
 
-  _initPeer(id) {
+  // ===== PEERJS INIT — try multiple free servers =====
+  async _initPeer(id) {
+    if (typeof Peer === 'undefined') return false;
+
+    // Try servers in order: PeerJS cloud, then backup
+    const servers = [
+      { host: '0.peerjs.com', port: 443, path: '/', secure: true },
+      { host: 'peerjs.com', port: 443, path: '/myapp', secure: true },
+    ];
+
+    for (const srv of servers) {
+      const result = await this._tryPeer(id, srv);
+      if (result) return true;
+    }
+    return false;
+  }
+
+  _tryPeer(id, serverConfig) {
     return new Promise((resolve) => {
-      if (typeof Peer === 'undefined') { resolve(null); return; }
       const timeout = setTimeout(() => {
-        console.warn('PeerJS timed out, using BroadcastChannel');
-        resolve(null);
-      }, 8000);
+        try { if (this.peer) { this.peer.destroy(); this.peer = null; } } catch(e){}
+        resolve(false);
+      }, 7000);
+
       try {
         this.peer = new Peer(id, {
-          host: '0.peerjs.com', port: 443, path: '/', secure: true, debug: 0,
-          config: { iceServers: [
-            {urls:'stun:stun.l.google.com:19302'},
-            {urls:'stun:stun1.l.google.com:19302'}
-          ]}
+          ...serverConfig,
+          debug: 0,
+          config: {
+            iceServers: [
+              { urls: 'stun:stun.l.google.com:19302' },
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' },
+            ]
+          }
         });
-        this.peer.on('open', () => { clearTimeout(timeout); resolve(this.peer); });
+
+        this.peer.on('open', () => {
+          clearTimeout(timeout);
+          resolve(true);
+        });
+
         this.peer.on('error', err => {
           clearTimeout(timeout);
-          if (err.type === 'unavailable-id') { resolve(this.peer); return; }
-          console.warn('PeerJS:', err.type);
-          this.peer = null;
-          resolve(null);
+          if (err.type === 'unavailable-id') {
+            // ID taken — generate a new one for client
+            if (!this.isHost) {
+              this.clientId = 'sb-' + Math.random().toString(36).substr(2, 9);
+            }
+            resolve(true); // Still connected, just ID conflict
+            return;
+          }
+          try { this.peer.destroy(); this.peer = null; } catch(e){}
+          resolve(false);
         });
-      } catch(e) { clearTimeout(timeout); this.peer = null; resolve(null); }
+      } catch(e) {
+        clearTimeout(timeout);
+        this.peer = null;
+        resolve(false);
+      }
     });
+  }
+
+  // ===== MESSAGING =====
+  _setupBC() {
+    try {
+      this.bc = new BroadcastChannel('sb_' + this.roomCode);
+      this.bc.onmessage = e => this._handle(e.data, 'bc');
+    } catch(e) {}
+  }
+
+  _sendBC(data) {
+    if (this.bc) try { this.bc.postMessage({...data, _from:this.clientId, _room:this.roomCode, _ts:Date.now()}); } catch(e){}
   }
 
   _sendToHost(data) {
     const msg = {...data, _from:this.clientId, _ts:Date.now()};
     if (this.hostConn && this.hostConn.open) try { this.hostConn.send(msg); } catch(e){}
-    if (this.bc) try { this.bc.postMessage({...msg, _room:this.roomCode}); } catch(e){}
+    this._sendBC(msg);
   }
 
   _sendToAll(data) {
     const msg = {...data, _from:this.clientId, _ts:Date.now()};
-    this.clientConns.forEach(conn => { if(conn.open) try{conn.send(msg)}catch(e){} });
-    if (this.bc) try { this.bc.postMessage({...msg, _room:this.roomCode}); } catch(e){}
+    this.clientConns.forEach(conn => {
+      if (conn.open) try { conn.send(msg); } catch(e){}
+    });
+    this._sendBC(msg);
   }
 
   broadcast(data) {
@@ -1133,10 +1233,11 @@ class SyncEngine {
 
   _handle(data, source) {
     if (!data || data._from === this.clientId) return;
+    if (data._room && data._room !== this.roomCode) return;
     // Host relays to all other clients
     if (this.isHost && source !== 'bc') {
       this.clientConns.forEach((conn, peerId) => {
-        if (peerId !== source && conn.open) try{conn.send(data)}catch(e){}
+        if (peerId !== source && conn.open) try { conn.send(data); } catch(e){}
       });
     }
     const h = this.handlers[data.type];
@@ -1144,10 +1245,10 @@ class SyncEngine {
   }
 
   _handleDisconnect(peerId) {
-    const spkEl = document.getElementById(`spk-${peerId}`);
+    const spkEl = document.getElementById('spk-' + peerId);
     if (spkEl) {
       const name = spkEl.querySelector('.speaker-name')?.textContent || 'A speaker';
-      showToast(`${name} disconnected`);
+      showToast(name + ' disconnected');
       spkEl.remove();
       delete S.speakers[peerId];
       updateCounts();
@@ -1156,16 +1257,17 @@ class SyncEngine {
 
   on(type, fn) { this.handlers[type] = fn; }
 
+  // ===== CLOCK SYNC =====
   _startClockSync() {
     const samples = [];
     this.on('pong', d => {
       const rtt = Date.now() - d.t1;
-      samples.push(rtt/2);
+      samples.push(rtt / 2);
       if (samples.length > 10) samples.shift();
       const sorted = [...samples].sort((a,b)=>a-b);
       this.clockOffset = sorted[Math.floor(sorted.length/2)];
       const el = document.getElementById('clientLatency');
-      if (el) el.textContent = `${rtt}ms`;
+      if (el) el.textContent = rtt + 'ms';
     });
     const t = setInterval(() => this._sendToHost({type:'ping', t1:Date.now()}), 3000);
     this._pingTimers.push(t);
@@ -1173,31 +1275,44 @@ class SyncEngine {
   }
 
   _startClockSyncBC() {
-    // BroadcastChannel clock sync fallback
-    const samples = [];
-    const origPong = this.handlers['pong'];
-    this.handlers['pong'] = d => {
+    this.on('pong', d => {
       const rtt = Date.now() - d.t1;
-      samples.push(rtt/2);
-      if(samples.length>10) samples.shift();
-      const sorted=[...samples].sort((a,b)=>a-b);
-      this.clockOffset=sorted[Math.floor(sorted.length/2)];
-      const el=document.getElementById('clientLatency');
-      if(el) el.textContent=`${rtt}ms`;
-    };
-    const t = setInterval(()=>{
-      if(this.bc) this.bc.postMessage({type:'ping',t1:Date.now(),_from:this.clientId,_room:this.roomCode,_ts:Date.now()});
-    }, 3000);
+      const el = document.getElementById('clientLatency');
+      if (el) el.textContent = rtt + 'ms';
+    });
+    const t = setInterval(() => this._sendBC({type:'ping', t1:Date.now()}), 3000);
     this._pingTimers.push(t);
   }
 
   destroy() {
     this._pingTimers.forEach(t => clearInterval(t));
-    if (this.bc) try{this.bc.close()}catch(e){}
-    if (this.hostConn) try{this.hostConn.close()}catch(e){}
-    this.clientConns.forEach(c=>{try{c.close()}catch(e){}});
-    if (this.peer) try{this.peer.destroy()}catch(e){}
+    if (this.bc) try { this.bc.close(); } catch(e){}
+    if (this.hostConn) try { this.hostConn.close(); } catch(e){}
+    this.clientConns.forEach(c => { try { c.close(); } catch(e){} });
+    if (this.peer) try { this.peer.destroy(); } catch(e){}
   }
+}
+
+// Host connection badge
+function updateHostConnectionBadge(p2pReady) {
+  const badge = document.getElementById('p2pBadge');
+  if (!badge) return;
+  if (p2pReady) {
+    badge.textContent = '🌐 P2P Ready';
+    badge.style.color = 'var(--accent3)';
+    badge.style.borderColor = 'rgba(16,185,129,0.3)';
+    badge.style.background = 'rgba(16,185,129,0.1)';
+  } else {
+    badge.textContent = '⚠ Local only';
+    badge.style.color = 'var(--warn)';
+    badge.style.borderColor = 'rgba(245,158,11,0.3)';
+    badge.style.background = 'rgba(245,158,11,0.1)';
+  }
+}
+
+function updateJoinStatus(msg) {
+  const el = document.getElementById('joinStatusMsg');
+  if (el) el.textContent = msg;
 }
 
 // ========================= SOURCE TABS =========================
@@ -1633,8 +1748,12 @@ async function startHost() {
   showScreen('hostScreen');
   updateStatus('hosting', 'hosting');
   if (hostBtn) { hostBtn.textContent = '🎵 Host Session'; hostBtn.disabled = false; }
-  const peerReady = S.engine.peer && !S.engine.peer.disconnected;
-  showToast(peerReady ? '✓ Ready! Share your room code' : 'Session started (local mode)');
+  const peerReady = S.engine.peer && !S.engine.peer.destroyed;
+  if (peerReady) {
+    showToast('✓ Session live! Share your room code');
+  } else {
+    showToast('⚠ P2P offline — only same-device tabs can join');
+  }
 }
 
 function addSpeaker(id, name) {
@@ -1775,10 +1894,13 @@ async function joinSession() {
     updateStatus('online','synced');
     showToast(`Joined room ${code}`);
   } catch(err) {
-    S.engine.destroy();
-    S.engine = null;
+    if (S.engine) { S.engine.destroy(); S.engine = null; }
     S.mode = null;
-    showToast('Could not connect — check room code');
+    const msg = err.message || 'Could not connect';
+    const firstLine = msg.split('\n')[0];
+    showToast('✗ ' + firstLine);
+    updateJoinStatus(firstLine);
+    console.error('Join error:', msg);
   } finally {
     if (joinBtn) { joinBtn.textContent = 'Connect →'; joinBtn.disabled = false; }
   }
